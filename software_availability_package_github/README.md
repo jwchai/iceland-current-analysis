@@ -1,159 +1,106 @@
 # Iceland Current analysis software
 
-This repository contains the MATLAB code used for the data assimilation, eddy
-detection and tracking, barotropic-instability, and baroclinic-instability
-analyses in the Iceland Current manuscript.
+This repository contains four MATLAB modules for the Iceland Current analysis.
+Each module is self-contained: source code and compact validation inputs are
+stored together, while generated MAT files and figures are excluded through
+`.gitignore` and recreated by the module's `run_example.m`.
 
-The repository is organized as four analysis modules. Author-specific absolute
-paths have been removed. Generated products are written beneath `outputs/`, and
-third-party software is expected beneath `external/`.
-
-## Repository map
+## Repository structure
 
 ```text
-iceland_current_analysis/
+software_availability_package_github/
 ├── 01_data_assimilation/
-│   └── fit_reanalysis_58N.m
+│   ├── data/data_assimilation_validation.mat
+│   ├── figure/
+│   ├── fit_reanalysis_58N.m
+│   ├── README.md
+│   └── run_example.m
 ├── 02_eddy_detection_tracking/
+│   ├── data/adt_validation_19930101_19930115.nc
+│   ├── figure/
 │   ├── eddy_detect.m
-│   └── first_birth.m
+│   ├── first_birth.m
+│   ├── README.md
+│   └── run_example.m
 ├── 03_barotropic_instability/
-│   └── time_var_reanalysis_58.m
+│   ├── data/reanaly_58_movavg.mat
+│   ├── data/smoothed_topography_on_xg.mat
+│   ├── figure/
+│   ├── time_var_reanalysis_58.m
+│   ├── README.md
+│   └── run_example.m
 ├── 04_baroclinic_instability/
-│   ├── baroclinic_instability_58N22W.m
-│   └── data/
-│       ├── uvts.nc
-│       └── glo_topo.nc
-├── data/
-│   ├── reanaly_58_movavg.mat
-│   └── smoothed_topography_on_xg.mat
-├── outputs/
+│   ├── data/odv_58N_22p5W_validation.mat
+│   ├── figure/
+│   ├── baroclinic_instability_odv_58N22p5W.m
+│   ├── README.md
+│   └── run_example.m
+├── scripts/
 ├── check_dependencies.m
-├── run_example.m
+├── run_validation.m
 └── setup_paths.m
 ```
 
-## Analysis modules
+## Modules
 
-1. `01_data_assimilation/fit_reanalysis_58N.m` reconstructs the 58 N velocity
-   section from GLORYS and four mooring records. It forms nominal 0--215 m
-   averages, applies a centered 14-day mean to the ADCP observations, and uses
-   `gamma=400`, `lambda_background=0.5`, and `lambda_smoothness=50`. The
-   reconstructed field is converted to the 30-day background state used by
-   module 03.
-2. `02_eddy_detection_tracking/eddy_detect.m` calls OceanEddies Eddyscan v2;
-   `first_birth.m` then calls the tolerance-based LNN tracker and applies the
-   study's area, lifetime, residence, and source-region criteria.
-3. `03_barotropic_instability/time_var_reanalysis_58.m` performs the audited
-   58 N rotating shallow-water eigenvalue analysis. Figure-4 events require a
-   growth rate greater than 0.1 d^-1 and an Earth-fixed modal period shorter
-   than 20 days.
-4. `04_baroclinic_instability/baroclinic_instability_58N22W.m` packages the
-   author's original continuously stratified QG workflow as one function. Its
-   default reproduces time index 16 and the original `k-l` range of
-   -2e-5--2e-5 m^-1.
+| Module | Analysis | Bundled validation input | Generated products |
+|---|---|---|---|
+| 01 | Mooring-constrained 58 N velocity assimilation | 90-day GLORYS and four-mooring block | `reanaly_fit_58N.mat` and comparison PNG |
+| 02 | ADT eddy detection and tolerance-LNN tracking | 15-day regional CMEMS/DUACS subset | detection/tracking MAT files and two PNGs |
+| 03 | 58 N rotating shallow-water barotropic stability | five velocity profiles and matching topography | modal-diagnostic MAT, PNG, and PDF |
+| 04 | ODV thermal-wind and continuously stratified QG stability | 38-level target profile and 3-by-3 sigma0 stencil | modal-diagnostic MAT, PNG, and PDF |
 
-## Quick start
+The compact inputs validate loading, numerical execution, saving, and plotting.
+They do not replace the full observational and reanalysis archives used for
+the manuscript.
 
-Start MATLAB in the repository root and run:
+## Setup and validation
+
+Start MATLAB in the repository root:
 
 ```matlab
 setup_paths
 report = check_dependencies;
+result = run_validation;
 ```
 
-After installing the CSIRO Seawater Library, the included baroclinic example
-can be run without author-specific files:
+`run_validation` executes modules 01, 03, and 04 without writing generated
+products. Module 02 is executed when OceanEddies and its required MathWorks
+toolboxes are available; otherwise it is reported as skipped.
+
+To generate the normal output files for one module:
 
 ```matlab
-result = run_example;
+run('01_data_assimilation/run_example.m')
+run('02_eddy_detection_tracking/run_example.m')
+run('03_barotropic_instability/run_example.m')
+run('04_baroclinic_instability/run_example.m')
 ```
 
-This evaluates module 04 at the original time index 16 without writing output
-or opening a figure. Module-specific input and run instructions are given in
-[`docs/INPUT_DATA.md`](docs/INPUT_DATA.md) and the comments at the beginning of
-each MATLAB file.
+## Dependencies
 
-## Third-party software
+- MATLAB R2022b is the verified environment.
+- Module 02 requires OceanEddies Eddyscan v2 and the Image Processing,
+  Mapping, Statistics and Machine Learning, and Parallel Computing toolboxes.
+- Module 03 can run serially; Parallel Computing Toolbox is optional.
+- Module 04 uses `sw_f`, `sw_dist`, and `sw_pden` from the CSIRO MATLAB
+  Seawater Library and uses `othercolor` for the supplied plotting style.
 
-The code was verified with MATLAB R2022b (9.13). NetCDF input, linear least
-squares, and dense eigenvalue calculations are provided by MATLAB; a separate
-NetCDF library and the Optimization Toolbox are not required.
+Place third-party MATLAB packages under `external/` or add an existing
+installation to the MATLAB path. `setup_paths.m` automatically adds
+`external/OceanEddies/` and `external/seawater/` when present.
 
-### CSIRO MATLAB Seawater Library
+## Validation-data builders
 
-Module 04 requires release 3.3.1 of the
-[CSIRO MATLAB Seawater Library](https://www.cmar.csiro.au/datacentre/ext_docs/seawater.html),
-specifically `sw_f`, `sw_dist`, `sw_pres`, `sw_bfrq`, and `sw_pden`. Extract it
-under `external/seawater/`, or add another installation to the MATLAB path.
+- `scripts/build_eddy_validation_data.py` rebuilds the module-02 ADT subset.
+- `scripts/build_validation_data.py` rebuilds the two module-03 MAT inputs.
+- `scripts/build_odv_baroclinic_validation_data.m` rebuilds the module-04 ODV
+  MAT input from the original gridded binary fields.
 
-The calculation uses the historical EOS-80 `sw_*` formulation. The TEOS-10
-GSW toolbox is not a drop-in replacement; substituting it would require a
-separate scientific reformulation and validation.
 
-### OceanEddies
+## Repository hygiene
 
-Module 02 requires the public
-[OceanEddies](https://github.com/jfaghm/OceanEddies) MATLAB package. Install it
-at `external/OceanEddies/`:
-
-```bash
-mkdir -p external
-git clone https://github.com/jfaghm/OceanEddies.git external/OceanEddies
-```
-
-The author's working copy is labelled revision `7c4f9a4`. Before archival
-release, retain that source snapshot or record the full Git commit identifier;
-do not rely only on a moving branch. This study uses Eddyscan v2 `scan_single`
-and `tolerance_track_lnn`, not the Python/Cython MHA tracker.
-
-OceanEddies requires these MathWorks add-ons for the workflow used here:
-
-- [Image Processing Toolbox](https://www.mathworks.com/products/image-processing.html)
-  for connected-component, morphology, and region-property operations.
-- [Mapping Toolbox](https://www.mathworks.com/products/mapping.html) for
-  geographic distances and degree/kilometre conversions.
-- [Statistics and Machine Learning Toolbox](https://www.mathworks.com/products/statistics.html)
-  for nearest-neighbour and radius searches.
-- [Parallel Computing Toolbox](https://www.mathworks.com/products/parallel-computing.html)
-  for the parallel OceanEddies v2 scan and faster module-03 calculations.
-  Module 03 itself falls back to serial execution when this toolbox is absent.
-
-The verified R2022b environment contained Image Processing Toolbox 11.6,
-Mapping Toolbox 5.4, Statistics and Machine Learning Toolbox 12.4, and Parallel
-Computing Toolbox 7.7. These are verified versions, not asserted minimums.
-
-See [`docs/THIRD_PARTY_SOFTWARE.md`](docs/THIRD_PARTY_SOFTWARE.md) for the
-dependency-to-module mapping and verification commands.
-
-## Included and external data
-
-The repository includes the two analysis-ready module-03 MAT files and the
-58 N, 22 W module-04 NetCDF subset. The raw GLORYS/mooring inputs needed to
-rerun module 01 and the daily CMEMS ADT input needed for module 02 are not
-included. Their exact expected filenames and locations are listed in
-[`docs/INPUT_DATA.md`](docs/INPUT_DATA.md).
-
-The included NetCDF files retain their CMEMS/GLORYS metadata. Authors should
-confirm dataset redistribution and acknowledgement requirements before making
-the GitHub repository public.
-
-## GitHub upload
-
-`04_baroclinic_instability/data/uvts.nc` is approximately 79 MB. It is below
-GitHub's 100 MiB hard limit for regular Git objects, but above the browser
-upload limit. Upload this repository with Git on the command line, not by
-dragging the files into the GitHub web interface. Detailed commands are in
-[`docs/UPLOAD_TO_GITHUB.md`](docs/UPLOAD_TO_GITHUB.md).
-
-## Reproducibility and attribution
-
-- Do not commit generated outputs, MATLAB autosave files, or operating-system
-  metadata; these are excluded by `.gitignore`.
-- Preserve the source identifiers and acknowledgement text for reused CMEMS,
-  GLORYS, OSNAP, OceanEddies, and Seawater resources.
-- Third-party code is linked rather than silently vendored. Preserve its
-  original licence and attribution information.
-- Before public release, the authors must select a licence for their own code
-  and add the corresponding `LICENSE` file. No licence has been assumed here.
-
+Only source code, documentation, compact validation inputs, and `.gitkeep`
+placeholders belong in the repository. Generated MAT files, figures,
+third-party packages, MATLAB autosave files, and operating-system metadata are
+excluded by `.gitignore`.

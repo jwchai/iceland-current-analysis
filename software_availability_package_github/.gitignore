@@ -1,0 +1,25 @@
+.DS_Store
+**/.DS_Store
+*.asv
+~$*
+
+# Locally installed third-party packages
+external/
+
+# Module-generated data products
+01_data_assimilation/data/reanaly_fit_58N.mat
+02_eddy_detection_tracking/data/eddy_detections_validation.mat
+02_eddy_detection_tracking/data/eddy_tracking_validation.mat
+03_barotropic_instability/data/barotropic_instability_validation.mat
+03_barotropic_instability/data/barotropic_instability_58N.mat
+04_baroclinic_instability/data/baroclinic_instability_odv_validation.mat
+
+# Module-generated figures; retain empty directories in Git
+01_data_assimilation/figure/*
+!01_data_assimilation/figure/.gitkeep
+02_eddy_detection_tracking/figure/*
+!02_eddy_detection_tracking/figure/.gitkeep
+03_barotropic_instability/figure/*
+!03_barotropic_instability/figure/.gitkeep
+04_baroclinic_instability/figure/*
+!04_baroclinic_instability/figure/.gitkeep

@@ -17,28 +17,31 @@ function result = time_var_reanalysis_58(velocity_file,topography_file,output_di
 % as diagnostics but do not determine the green event markers.
 %
 % Example
-%   root = '/path/to/software_availability_package';
-%   velocity_file = '/path/to/reanaly_fit_58N.mat';
-%   topo_file = fullfile(root,'data','smoothed_topography_on_xg.mat');
-%   out = fullfile(root,'outputs','barotropic_instability_58N');
-%   result = time_var_reanalysis_58(velocity_file,topo_file,out,struct());
+%   module_dir = fileparts(mfilename('fullpath'));
+%   velocity_file = fullfile(module_dir,'data','reanaly_58_movavg.mat');
+%   topo_file = fullfile(module_dir,'data','smoothed_topography_on_xg.mat');
+%   result = time_var_reanalysis_58(velocity_file,topo_file, ...
+%       fullfile(module_dir,'data'),struct());
 
+module_dir=fileparts(mfilename('fullpath'));
 if nargin<1 || isempty(velocity_file)
-    error('velocity_file is required and must be the output from module 01.');
+    velocity_file=fullfile(module_dir,'data','reanaly_58_movavg.mat');
 end
 if nargin<2 || isempty(topography_file)
-    error('topography_file is required.');
+    topography_file=fullfile(module_dir,'data','smoothed_topography_on_xg.mat');
 end
-if nargin<3, output_dir=''; end
+if nargin<3 || isempty(output_dir), output_dir=fullfile(module_dir,'data'); end
 if nargin<4 || isempty(options), options=struct(); end
 opt = default_options(options);
+if isempty(opt.figure_dir), opt.figure_dir=fullfile(module_dir,'figure'); end
 
 validate_file(velocity_file,'velocity');
 validate_file(topography_file,'topography');
 if opt.save_output && isempty(output_dir)
     error('output_dir is required when save_output=true.');
 end
-if ~isempty(output_dir) && exist(output_dir,'dir')~=7, mkdir(output_dir); end
+if opt.save_output && exist(output_dir,'dir')~=7, mkdir(output_dir); end
+if opt.make_figure && exist(opt.figure_dir,'dir')~=7, mkdir(opt.figure_dir); end
 
 V = load(velocity_file);
 T = load(topography_file);
@@ -83,6 +86,11 @@ depth = -topography;
 if any(depth<=0), error('-topo_on_xg must be positive water depth.'); end
 depth = smoothdata(depth,'movmean',opt.topography_window_points);
 
+velocity_file_reference=portable_reference(velocity_file,module_dir);
+topography_file_reference=portable_reference(topography_file,module_dir);
+saved_options=opt;
+saved_options.figure_dir=portable_reference(opt.figure_dir,module_dir);
+
 nt = numel(time);
 gr = nan(1,nt);
 gr_l = nan(1,nt);
@@ -93,7 +101,7 @@ if opt.save_output
     checkpoint_file = fullfile(output_dir,opt.output_filename);
     if opt.resume && exist(checkpoint_file,'file')==2
         P = load(checkpoint_file,'time','gr','gr_l','Wt','last_completed','options');
-        if isfield(P,'options') && isequaln(P.time,time) && isequaln(P.options,opt)
+        if isfield(P,'options') && isequaln(P.time,time) && isequaln(P.options,saved_options)
             gr=P.gr; gr_l=P.gr_l; Wt=P.Wt; last_completed=P.last_completed;
             fprintf('Resuming after day %d of %d.\n',last_completed,nt);
         end
@@ -129,9 +137,9 @@ for chunk_start=last_completed+1:opt.chunk_size:nt
     Wt(chunk_index)=period_chunk;
     last_completed=chunk_index(end);
     if opt.save_output
-        options=opt;
+        options=saved_options;
         save(checkpoint_file,'time','gr','gr_l','Wt','last_completed','options', ...
-            'velocity_file','topography_file');
+            'velocity_file_reference','topography_file_reference');
     end
     elapsed=toc(run_clock);
     eta=elapsed/max(1,last_completed)*(nt-last_completed);
@@ -149,17 +157,19 @@ time_cond=time(unstable);
 result=struct('time',time,'growth_rate_day',gr,'wavelength_km',gr_l, ...
     'earth_fixed_period_day',Wt,'efolding_distance_over_wavelength',D_over_lambda, ...
     'unstable',unstable,'locally_amplifying',locally_amplifying, ...
-    'time_cond',time_cond,'options',opt, ...
-    'velocity_file',velocity_file,'topography_file',topography_file, ...
+    'time_cond',time_cond,'options',saved_options, ...
+    'velocity_file',velocity_file_reference, ...
+    'topography_file',topography_file_reference, ...
     'input_profile_valid',input_profile_valid,'last_completed',last_completed);
 
 if opt.save_output
+    options=saved_options;
     save(checkpoint_file,'time','gr','gr_l','Wt','D_over_lambda','unstable', ...
         'locally_amplifying','time_cond','input_profile_valid','last_completed','options', ...
-        'velocity_file','topography_file');
+        'velocity_file_reference','topography_file_reference');
 end
 if opt.make_figure
-    plot_diagnostics(result,output_dir,opt.save_output);
+    plot_diagnostics(result,opt);
 end
 end
 
@@ -252,9 +262,10 @@ for il=1:numel(wavelengths)
 end
 end
 
-function plot_diagnostics(result,output_dir,save_output)
+function plot_diagnostics(result,opt)
 date=datetime(result.time,'ConvertFrom','datenum');
-fig=figure('Color','w','Units','inches','Position',[1 1 7.15 6.2]);
+fig=figure('Color','w','Visible',opt.figure_visible, ...
+    'Units','inches','Position',[1 1 7.15 6.2]);
 tiledlayout(fig,3,1,'TileSpacing','compact','Padding','compact');
 labels={'Growth rate (d^{-1})','Wavelength (km)','Earth-fixed period (days)'};
 titles={'a  Maximum modal growth rate','b  Wavelength of the most unstable mode', ...
@@ -267,13 +278,17 @@ for panel=1:3
     scatter(ax,date(result.unstable),values{panel}(result.unstable),8, ...
         [0 0.62 0.451],'filled','MarkerFaceAlpha',0.7);
     ylabel(ax,labels{panel}); title(ax,titles{panel},'FontWeight','normal');
+    xtickformat(ax,'yyyy-MM-dd');
     grid(ax,'on'); box(ax,'off');
 end
 xlabel('Time');
-if save_output
-    exportgraphics(fig,fullfile(output_dir,'barotropic_instability_58N.png'),'Resolution',300);
-    exportgraphics(fig,fullfile(output_dir,'barotropic_instability_58N.pdf'),'ContentType','vector');
+exportgraphics(fig,fullfile(opt.figure_dir,[opt.figure_basename '.png']), ...
+    'Resolution',300,'BackgroundColor','white');
+if opt.save_pdf
+    exportgraphics(fig,fullfile(opt.figure_dir,[opt.figure_basename '.pdf']), ...
+        'ContentType','vector','BackgroundColor','white');
 end
+if strcmpi(opt.figure_visible,'off'), close(fig); end
 end
 
 function opt=default_options(opt)
@@ -283,7 +298,9 @@ d=struct('coriolis_s',1.23e-4,'gravity_m_s2',9.81, ...
     'modal_period_threshold_day',20,'distance_ratio_threshold',0.25, ...
     'start_date',[],'end_date',[],'chunk_size',30,'use_parallel',true, ...
     'resume',true,'make_figure',true,'save_output',true, ...
-    'output_filename','barotropic_instability_58N.mat');
+    'output_filename','barotropic_instability_58N.mat', ...
+    'figure_dir','','figure_basename','barotropic_instability_58N', ...
+    'figure_visible','off','save_pdf',true);
 names=fieldnames(d);
 for j=1:numel(names)
     if ~isfield(opt,names{j}) || isempty(opt.(names{j})), opt.(names{j})=d.(names{j}); end
@@ -313,5 +330,18 @@ end
 function require_fields(S,names,label)
 for j=1:numel(names)
     if ~isfield(S,names{j}), error('%s is missing variable %s.',label,names{j}); end
+end
+end
+
+function value=portable_reference(path_value,module_dir)
+path_value=char(path_value);
+module_dir=char(module_dir);
+prefix=[module_dir filesep];
+if startsWith(path_value,prefix)
+    value=path_value(numel(prefix)+1:end);
+elseif strcmp(path_value,module_dir)
+    value='.';
+else
+    value=path_value;
 end
 end

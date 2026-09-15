@@ -1,88 +1,71 @@
-function result=fit_reanalysis_58N(data_dir,output_dir,options)
-%FIT_REANALYSIS_58N Mooring-constrained GLORYS velocity fit along 58 N.
+function result=fit_reanalysis_58N(input_file,output_root,options)
+%FIT_REANALYSIS_58N Validate mooring-constrained GLORYS assimilation at 58 N.
 %
-% result = fit_reanalysis_58N(data_dir,output_dir,options)
+% result = fit_reanalysis_58N(input_file,output_root,options)
 %
-% This is the function version of the author's original
-% fit_reanaylse_for_fig2.m workflow. It reads the two GLORYS sections and
-% the four UMM2/IB3/IB4/IB5 mooring records used in the manuscript, performs
-% the weighted least-squares fit, interpolates the result to the 1-km grid,
-% and calculates the 30-day background current used by the instability
-% analysis. Both GLORYS and the mooring observations are represented as
-% nominal 0--215 m depth averages. A centered 14-day ADCP mean is calculated
-% before each daily reconstruction. No post-hoc velocity scaling is applied.
+% The repository ships a compact, preprocessed validation input instead of
+% the multi-year raw GLORYS and mooring files. The input contains:
+%   time_bg      [time x 1] daily MATLAB datenums
+%   lon_bg       [longitude x 1] GLORYS longitude
+%   v_bg         [time x longitude] 0--215 m GLORYS meridional velocity
+%   lon_obs      [mooring x 1] mooring longitudes
+%   observations [time x mooring] preprocessed mooring velocity
 %
-% Example
-%   data_dir = '/path/to/raw_input_data';
-%   output_dir = '/path/to/output';
-%   result = fit_reanalysis_58N(data_dir,output_dir,struct());
+% The observations already contain the manuscript preprocessing: nominal
+% 0--215 m depth averages and a centered 14-day mean. This function validates
+% the assimilation itself, interpolation to 1 km, 30-day background smoothing,
+% and plotting. It does not validate raw-data decoding or preprocessing.
 %
-% options fields and manuscript defaults
-%   adcp_filter_window_days = 14  (total width; +/-7 days)
+% Quick validation using the bundled input (plots, but does not save):
+%   result = fit_reanalysis_58N();
+%
+% Save the MAT result and comparison figure:
+%   module_dir = fileparts(mfilename('fullpath'));
+%   result = fit_reanalysis_58N([],module_dir, ...
+%       struct('save_output',true,'figure_date','2020-12-15'));
+%
+% Main options
 %   gamma                   = 400
 %   lambda_background      = 0.5
 %   lambda_smoothness      = 50
 %   background_window_days = 30
 %   make_figure            = true
-%   figure_index           = 500
-%   save_output            = true
+%   figure_date            = [] (middle available day)
+%   figure_index           = [] (alternative one-based sample index)
+%   save_output            = false
 
-if nargin<1 || isempty(data_dir), error('data_dir is required.'); end
-if nargin<2 || isempty(output_dir), output_dir=''; end
+script_dir=fileparts(mfilename('fullpath'));
+if nargin<1 || isempty(input_file)
+    input_file=fullfile(script_dir,'data','data_assimilation_validation.mat');
+end
+if nargin<2 || isempty(output_root), output_root=script_dir; end
 if nargin<3 || isempty(options), options=struct(); end
 opt=defaults(options);
-if exist(data_dir,'dir')~=7, error('Data directory not found: %s',data_dir); end
-if opt.save_output && isempty(output_dir), error('output_dir is required when save_output=true.'); end
-if ~isempty(output_dir) && exist(output_dir,'dir')~=7, mkdir(output_dir); end
-
-%% 1. The two GLORYS daily files used in the original analysis
-glorys_files={ ...
-    fullfile(data_dir,'cmems_mod_glo_phy_my_0.083deg_P1D-m_1755700424406.nc'), ...
-    fullfile(data_dir,'cmems_mod_glo_phy_myint_0.083deg_P1D-m_1756090265159.nc')};
-for j=1:numel(glorys_files)
-    if exist(glorys_files{j},'file')~=2, error('Missing GLORYS file: %s',glorys_files{j}); end
+if exist(input_file,'file')~=2, error('Validation input not found: %s',input_file); end
+data_output_dir=fullfile(output_root,'data');
+figure_output_dir=fullfile(output_root,'figure');
+if opt.save_output && exist(data_output_dir,'dir')~=7, mkdir(data_output_dir); end
+if opt.save_output && opt.make_figure && exist(figure_output_dir,'dir')~=7
+    mkdir(figure_output_dir);
 end
 
-[time1,lon1,v1]=read_glorys_velocity(glorys_files{1},opt.depth_range_m);
-[time2,lon2,v2]=read_glorys_velocity(glorys_files{2},opt.depth_range_m);
-if numel(lon1)~=numel(lon2) || any(abs(lon1-lon2)>1e-10)
-    error('The two GLORYS longitude grids are not identical.');
+%% 1. Load the compact, aligned validation block
+S=load(input_file);
+required={'time_bg','lon_bg','v_bg','lon_obs','observations'};
+for j=1:numel(required)
+    if ~isfield(S,required{j}), error('Validation input is missing %s.',required{j}); end
 end
-time_bg=[time1;time2]; v_bg=[v1;v2]; lon_bg=lon1(:);
-[time_bg,order]=sort(time_bg); v_bg=v_bg(order,:);
-[time_bg,unique_index]=unique(time_bg,'stable'); v_bg=v_bg(unique_index,:);
+time_bg=double(S.time_bg(:));
+lon_bg=double(S.lon_bg(:));
+v_bg=double(S.v_bg);
+lon_obs=double(S.lon_obs(:));
+observations=double(S.observations);
+validate_input(time_bg,lon_bg,v_bg,lon_obs,observations,opt);
 
-%% 2. Nominal 0--215 m averages from the four 58 N moorings
-lon_obs=[-28;-24.42;-24.14;-19.14];
-umm2_file1=locate_umm2_file(data_dir,'OS_OSNAP-UMM2_201807_ADCP_300m.nc');
-umm2_file2=locate_umm2_file(data_dir,'OS_OSNAP-UMM2_202009_ADCP_300m.nc');
-[time_uum2,v_uum2]=load_umm2_raw_depth_average( ...
-    umm2_file1,umm2_file2,opt.depth_range_m);
-[time_ib3,v_ib3]=load_uk_depth_average( ...
-    fullfile(data_dir,'2018-2020 UK ib3 0-100 .mat'), ...
-    fullfile(data_dir,'2020-2022 UK ib3 0-100 .mat'), ...
-    fullfile(data_dir,'2018-2020 UK ib3 200-100 .mat'), ...
-    fullfile(data_dir,'2020-2022 UK ib3 200-100 .mat'),opt.mooring_layer_thickness_m);
-[time_ib4,v_ib4]=load_uk_depth_average( ...
-    fullfile(data_dir,'2018-2020 UK ib4 0-100 .mat'), ...
-    fullfile(data_dir,'2020-2022 UK ib4 0-100 .mat'), ...
-    fullfile(data_dir,'2018-2020 UK ib4 200-100 .mat'), ...
-    fullfile(data_dir,'2020-2022 UK ib4 200-100 .mat'),opt.mooring_layer_thickness_m);
-[time_ib5,v_ib5]=load_uk_depth_average( ...
-    fullfile(data_dir,'2018-2020 UK ib5 0-100 .mat'), ...
-    fullfile(data_dir,'2020-2022 UK ib5 0-100 .mat'), ...
-    fullfile(data_dir,'2018-2020 UK ib5 200-100 .mat'), ...
-    fullfile(data_dir,'2020-2022 UK ib5 200-100 .mat'),opt.mooring_layer_thickness_m);
-time_cell={time_uum2,time_ib3,time_ib4,time_ib5};
-velocity_cell={v_uum2,v_ib3,v_ib4,v_ib5};
-
-start_common=max(cellfun(@(t) min(t,[],'omitnan'),time_cell));
-end_common=min(cellfun(@(t) max(t,[],'omitnan'),time_cell));
-if start_common>=end_common, error('The four mooring records have no common period.'); end
-
-%% 3. Mooring-constrained weighted least-squares reconstruction
+%% 2. Mooring-constrained weighted least-squares reconstruction
 nlon=numel(lon_bg); ntime=numel(time_bg); nmoor=numel(lon_obs);
-e=ones(nlon,1); D2=spdiags([e -2*e e],[-1 0 1],nlon,nlon);
+e=ones(nlon,1);
+D2=spdiags([e -2*e e],[-1 0 1],nlon,nlon);
 D2(1,:)=0; D2(end,:)=0;
 H=zeros(nmoor,nlon);
 for j=1:nmoor
@@ -92,23 +75,18 @@ for j=1:nmoor
     H(j,:)=interp1(lon_bg,eye(nlon),lon_obs(j),'linear',0);
 end
 
-lat0=58; lon_start=-28; xg=0:1:520;
+lat0=58;
+lon_start=-28;
+xg=0:1:520;
 lon_xg=lon_start+xg/(111.32*cosd(lat0));
-v_fitted=nan(ntime,nlon); v_on_1km=nan(ntime,numel(xg));
-observations=nan(ntime,nmoor); fit_residual_rms=nan(ntime,1);
-half_window=opt.adcp_filter_window_days/2;
+v_fitted=nan(ntime,nlon);
+v_on_1km=nan(ntime,numel(xg));
+fit_residual_rms=nan(ntime,1);
 A=[sqrt(opt.gamma)*H; ...
    sqrt(opt.lambda_background)*eye(nlon); ...
    sqrt(opt.lambda_smoothness)*D2];
 
 for it=1:ntime
-    for j=1:nmoor
-        % This is the centered 14-day ADCP low-pass preprocessing described
-        % in the manuscript, evaluated at each daily GLORYS analysis time.
-        use=abs(time_cell{j}-time_bg(it))<=half_window;
-        values=velocity_cell{j}(use); values=values(isfinite(values));
-        if ~isempty(values), observations(it,j)=mean(values); end
-    end
     if all(isfinite(observations(it,:))) && all(isfinite(v_bg(it,:)))
         b=[sqrt(opt.gamma)*observations(it,:)'; ...
            sqrt(opt.lambda_background)*v_bg(it,:)'; ...
@@ -119,11 +97,13 @@ for it=1:ntime
         fit_residual_rms(it)=sqrt(mean((H*v_fit-observations(it,:)').^2));
     end
 end
+if ~any(all(isfinite(v_fitted),2))
+    error('No complete assimilation profile was produced from the validation input.');
+end
 
-%% 4. Common period and 30-day quasi-steady background current
-use_common=time_bg>=ceil(start_common) & time_bg<=floor(end_common);
-time=time_bg(use_common); vg=v_on_1km(use_common,:);
-if isempty(time), error('No reconstructed GLORYS days fall in the common mooring period.'); end
+%% 3. Thirty-day quasi-steady background current
+time=time_bg;
+vg=v_on_1km;
 dt_day=median(diff(time),'omitnan');
 window_count=max(1,round(opt.background_window_days/dt_day));
 if mod(window_count,2)==0, window_count=window_count+1; end
@@ -131,180 +111,113 @@ vg_smooth=movmean(vg,window_count,1,'omitnan');
 time_day=(ceil(min(time)):floor(max(time)))';
 vg_day=nan(numel(time_day),size(vg,2));
 for j=1:numel(time_day)
-    [~,nearest]=min(abs(time-time_day(j))); vg_day(j,:)=vg_smooth(nearest,:);
+    [~,nearest]=min(abs(time-time_day(j)));
+    vg_day(j,:)=vg_smooth(nearest,:);
 end
 
-result=struct('latitude',lat0,'longitude',lon_bg,'background_velocity',v_bg, ...
-    'background_time',time_bg,'mooring_longitude',lon_obs, ...
-    'mooring_time',{time_cell},'mooring_velocity',{velocity_cell}, ...
-    'mooring_windowed_velocity',observations,'fitted_velocity',v_fitted, ...
-    'fit_residual_rms',fit_residual_rms,'xg_km',xg,'lon_xg',lon_xg, ...
-    'time',time,'vg',vg,'vg_smooth',vg_smooth,'time_day',time_day, ...
-    'vg_day',vg_day,'depth_range_m',opt.depth_range_m, ...
-    'adcp_filter_window_days',opt.adcp_filter_window_days, ...
-    'options',opt,'source_files',{glorys_files});
+sample_note='';
+if isfield(S,'sample_note'), sample_note=char(S.sample_note); end
+source_description='';
+if isfield(S,'source_description'), source_description=char(S.source_description); end
+result=struct('latitude',lat0,'longitude',lon_bg, ...
+    'background_velocity',v_bg,'background_time',time_bg, ...
+    'mooring_longitude',lon_obs,'mooring_windowed_velocity',observations, ...
+    'fitted_velocity',v_fitted,'fit_residual_rms',fit_residual_rms, ...
+    'xg_km',xg,'lon_xg',lon_xg,'time',time,'vg',vg, ...
+    'vg_smooth',vg_smooth,'time_day',time_day,'vg_day',vg_day, ...
+    'observation_filter_window_days',14,'depth_range_m',[0 215], ...
+    'options',opt,'input_file',input_file,'sample_note',sample_note, ...
+    'source_description',source_description);
 
-%% 5. Save the variables expected by the downstream 58 N analysis
+%% 4. Save and plot validation outputs
 if opt.save_output
-    save(fullfile(output_dir,'reanaly_fit_58N.mat'),'xg','lon_xg','vg','time', ...
-        'vg_smooth','time_day','vg_day','window_count','opt','-v7.3');
+    save(fullfile(data_output_dir,'reanaly_fit_58N.mat'),'xg','lon_xg','vg','time', ...
+        'vg_smooth','time_day','vg_day','window_count','opt','-v7');
 end
 
 if opt.make_figure
-    available=find(all(isfinite(v_fitted),2));
-    if isempty(available), error('No complete fitted profile is available for plotting.'); end
-    requested=min(max(1,round(opt.figure_index)),ntime);
-    [~,q]=min(abs(available-requested)); iday=available(q);
-    figure('Color','w');
+    iday=select_figure_day(time_bg,v_fitted,opt);
+    fig=figure('Color','w','Units','inches','Position',[1 1 7.15 4.4]);
     plot(lon_bg,v_bg(iday,:),'k--','LineWidth',1.2); hold on;
     plot(lon_bg,v_fitted(iday,:),'b-','LineWidth',2);
     plot(lon_obs,observations(iday,:),'ro','MarkerSize',7,'LineWidth',1.3);
-    xlabel('Longitude (degree E)'); ylabel('Meridional velocity (m s^{-1})');
-    legend('GLORYS background','Mooring-constrained fit','Mooring observations','Location','best');
+    yline(0,'Color',[0.65 0.65 0.65],'LineStyle',':');
+    xlabel('Longitude (degree E)');
+    ylabel('Meridional velocity (m s^{-1})');
+    legend('GLORYS background','Mooring-constrained fit', ...
+        'Mooring observations','Location','best');
     fit_date=datetime(time_bg(iday),'ConvertFrom','datenum','Format','yyyy-MM-dd');
-    title(sprintf('58 N fit: %s',char(fit_date))); grid on;
+    title(sprintf('58 N assimilation validation: %s',char(fit_date)));
+    subtitle(sprintf('Fit residual RMS = %.4f m s^{-1}',fit_residual_rms(iday)));
+    grid on; box off;
+    result.figure_date=fit_date;
+    result.figure_handle=fig;
     if opt.save_output
-        exportgraphics(gcf,fullfile(output_dir,'reanalysis_fit_58N.png'),'Resolution',300);
+        exportgraphics(fig,fullfile(figure_output_dir,'reanalysis_fit_58N.png'), ...
+            'Resolution',300);
     end
 end
 end
 
+function validate_input(time_bg,lon_bg,v_bg,lon_obs,observations,opt)
+if numel(time_bg)<3 || any(~isfinite(time_bg)) || any(diff(time_bg)<=0)
+    error('time_bg must contain at least three finite, strictly increasing values.');
+end
+if numel(lon_bg)<3 || any(~isfinite(lon_bg)) || any(diff(lon_bg)<=0)
+    error('lon_bg must contain at least three finite, strictly increasing values.');
+end
+if ~isequal(size(v_bg),[numel(time_bg),numel(lon_bg)])
+    error('v_bg must have size [numel(time_bg), numel(lon_bg)].');
+end
+if ~isequal(size(observations),[numel(time_bg),numel(lon_obs)])
+    error('observations must have size [numel(time_bg), numel(lon_obs)].');
+end
+if numel(time_bg)<opt.background_window_days
+    warning('The sample is shorter than the requested background window.');
+end
+if any(~isfinite(lon_obs)), error('lon_obs must be finite.'); end
+end
+
+function iday=select_figure_day(time_bg,v_fitted,opt)
+available=find(all(isfinite(v_fitted),2));
+if isempty(available), error('No complete fitted profile is available for plotting.'); end
+if ~isempty(opt.figure_date)
+    if isdatetime(opt.figure_date)
+        requested=datenum(opt.figure_date); %#ok<DATNM>
+    elseif ischar(opt.figure_date) || isstring(opt.figure_date)
+        requested=datenum(char(opt.figure_date)); %#ok<DATNM>
+    elseif isnumeric(opt.figure_date) && isscalar(opt.figure_date)
+        requested=double(opt.figure_date);
+    else
+        error('figure_date must be a datetime, date string, or MATLAB datenum.');
+    end
+    [~,q]=min(abs(time_bg(available)-requested));
+    iday=available(q);
+elseif ~isempty(opt.figure_index)
+    requested=min(max(1,round(opt.figure_index)),numel(time_bg));
+    [~,q]=min(abs(available-requested));
+    iday=available(q);
+else
+    iday=available(ceil(numel(available)/2));
+end
+end
+
 function opt=defaults(opt)
-d=struct('adcp_filter_window_days',14,'gamma',400,'lambda_background',0.5, ...
-    'lambda_smoothness',50,'background_window_days',30,'make_figure',true, ...
-    'figure_index',500,'save_output',true,'depth_range_m',[0 215], ...
-    'mooring_layer_thickness_m',[100 115]);
+d=struct('gamma',400,'lambda_background',0.5,'lambda_smoothness',50, ...
+    'background_window_days',30,'make_figure',true,'figure_date',[], ...
+    'figure_index',[],'save_output',false);
 names=fieldnames(d);
 for j=1:numel(names)
-    if ~isfield(opt,names{j}) || isempty(opt.(names{j})), opt.(names{j})=d.(names{j}); end
+    if ~isfield(opt,names{j}), opt.(names{j})=d.(names{j}); end
 end
-if ~isscalar(opt.adcp_filter_window_days) || opt.adcp_filter_window_days<=0
-    error('adcp_filter_window_days must be a positive scalar.');
+positive={'gamma','lambda_background','lambda_smoothness','background_window_days'};
+for j=1:numel(positive)
+    value=opt.(positive{j});
+    if ~isscalar(value) || ~isfinite(value) || value<=0
+        error('%s must be a positive finite scalar.',positive{j});
+    end
 end
-if ~isequal(size(opt.depth_range_m),[1 2]) || opt.depth_range_m(1)~=0 || ...
-        opt.depth_range_m(2)~=215
-    error('The manuscript configuration requires depth_range_m=[0 215].');
+if ~isempty(opt.figure_index) && (~isscalar(opt.figure_index) || ~isfinite(opt.figure_index))
+    error('figure_index must be empty or one finite scalar.');
 end
-if numel(opt.mooring_layer_thickness_m)~=2 || ...
-        any(opt.mooring_layer_thickness_m<=0) || ...
-        abs(sum(opt.mooring_layer_thickness_m)-215)>1e-10
-    error('mooring_layer_thickness_m must contain two positive values summing to 215 m.');
-end
-end
-
-function [time,lon,vmean]=read_glorys_velocity(file,depth_range_m)
-lon=double(ncread(file,'longitude')); lon=lon(:);
-depth=double(ncread(file,'depth')); depth=depth(:);
-raw_time=double(ncread(file,'time')); raw_time=raw_time(:);
-units=ncreadatt(file,'time','units'); time=cf_time_to_datenum(raw_time,units);
-raw=squeeze(double(ncread(file,'vo')));
-sz=size(raw); target=[numel(time),numel(depth),numel(lon)];
-perm=zeros(1,3); remaining=1:3;
-for j=1:3
-    candidate=remaining(sz(remaining)==target(j));
-    if isempty(candidate), error('Cannot identify vo dimensions in %s.',file); end
-    perm(j)=candidate(1); remaining(remaining==perm(j))=[];
-end
-raw=permute(raw,perm);
-% Finite-volume layer-overlap weights give a true thickness-weighted
-% average over 0--215 m, rather than an arithmetic mean over all 50 levels.
-edges=[0;0.5*(depth(1:end-1)+depth(2:end));Inf];
-weights=max(0,min(edges(2:end),depth_range_m(2))-max(edges(1:end-1),depth_range_m(1)));
-if abs(sum(weights)-diff(depth_range_m))>1e-8
-    error('GLORYS depth coordinate does not cover the requested 0--215 m layer.');
-end
-w=reshape(weights,1,[],1);
-valid=isfinite(raw);
-numerator=sum(raw.*w,2,'omitnan');
-denominator=sum(valid.*w,2);
-vmean=squeeze(numerator./denominator);
-vmean(squeeze(denominator)<0.95*diff(depth_range_m))=NaN;
-if ~isequal(size(vmean),[numel(time),numel(lon)]), error('Unexpected depth-mean vo dimensions.'); end
-end
-
-function dn=cf_time_to_datenum(value,units)
-tok=regexp(strtrim(units),'^(seconds|hours|days)\s+since\s+(.+)$','tokens','once','ignorecase');
-if isempty(tok), error('Unsupported NetCDF time units: %s',units); end
-origin_text=regexprep(strrep(strtrim(tok{2}),'T',' '),'\s*(UTC|Z)$','');
-origin=datenum(origin_text); %#ok<DATNM>
-switch lower(tok{1})
-    case 'seconds', dn=origin+value/86400;
-    case 'hours', dn=origin+value/24;
-    case 'days', dn=origin+value;
-end
-end
-
-function [time,velocity]=load_mooring_pair(file1,file2,velocity_name)
-if exist(file1,'file')~=2 || exist(file2,'file')~=2, error('Missing mooring file pair.'); end
-S1=load(file1); S2=load(file2);
-if ~isfield(S1,'time') || ~isfield(S2,'time') || ...
-        ~isfield(S1,velocity_name) || ~isfield(S2,velocity_name)
-    error('Expected time and %s in mooring files.',velocity_name);
-end
-time=[double(S1.time(:));double(S2.time(:))];
-v1=S1.(velocity_name); v2=S2.(velocity_name);
-velocity=[double(v1(:));double(v2(:))];
-valid=isfinite(time); time=time(valid); velocity=velocity(valid);
-[time,order]=sort(time); velocity=velocity(order);
-[time,unique_index]=unique(time,'stable'); velocity=velocity(unique_index);
-end
-
-function file=locate_umm2_file(data_dir,name)
-candidates={fullfile(data_dir,name),fullfile(data_dir,'UMM2',name), ...
-    fullfile(fileparts(data_dir),'UMM2',name)};
-found=find(cellfun(@(p) exist(p,'file')==2,candidates),1);
-if isempty(found)
-    error('Missing raw UMM2 NetCDF %s. Place it in data_dir or data_dir/UMM2.',name);
-end
-file=candidates{found};
-end
-
-function [time,velocity]=load_umm2_raw_depth_average(file1,file2,depth_range_m)
-[t1,v1]=load_umm2_raw_single(file1,depth_range_m);
-[t2,v2]=load_umm2_raw_single(file2,depth_range_m);
-time=[t1;t2]; velocity=[v1;v2];
-[time,order]=sort(time); velocity=velocity(order);
-[time,unique_index]=unique(time,'stable'); velocity=velocity(unique_index);
-end
-
-function [time,velocity]=load_umm2_raw_single(file,depth_range_m)
-if exist(file,'file')~=2, error('Missing raw UMM2 file: %s',file); end
-raw_time=double(ncread(file,'TIME')); raw_time=raw_time(:);
-units=ncreadatt(file,'TIME','units'); time=cf_time_to_datenum(raw_time,units);
-depth=double(ncread(file,'BINDEPTH'));
-v=double(ncread(file,'VCUR'));
-if size(v,2)==numel(time)
-    % MATLAB commonly returns these NetCDF variables as [bin x time].
-elseif size(v,1)==numel(time)
-    v=v'; depth=depth';
-else
-    error('Cannot identify TIME dimension in %s.',file);
-end
-if ~isequal(size(v),size(depth)), error('VCUR and BINDEPTH sizes differ in %s.',file); end
-v(abs(v)>10)=NaN; depth(depth<0 | depth>12000)=NaN;
-velocity=nan(numel(time),1);
-for it=1:numel(time)
-    use=depth(:,it)>=depth_range_m(1) & depth(:,it)<=depth_range_m(2) & ...
-        isfinite(v(:,it));
-    if nnz(use)>=2, velocity(it)=mean(v(use,it),'omitnan'); end
-end
-end
-
-function [time,velocity]=load_uk_depth_average(upper1,upper2,lower1,lower2,layer_thickness)
-[time_upper,velocity_upper]=load_mooring_pair(upper1,upper2,'v_mean');
-[time_lower,velocity_lower]=load_mooring_pair(lower1,lower2,'v_mean');
-time=time_upper;
-if numel(time_lower)<2, error('Too few lower-layer samples in UK mooring files.'); end
-nearest=interp1(time_lower,(1:numel(time_lower))',time,'nearest',NaN);
-matched=nan(size(time)); usable=isfinite(nearest);
-nearest_index=round(nearest(usable));
-dt=max(1e-6,0.51*median(diff(time_lower),'omitnan'));
-usable_index=find(usable);
-close_enough=abs(time_lower(nearest_index)-time(usable))<=dt;
-usable(:)=false; usable(usable_index(close_enough))=true;
-nearest_index=round(nearest(usable));
-matched(usable)=velocity_lower(nearest_index);
-velocity=nan(size(time)); complete=isfinite(velocity_upper)&isfinite(matched);
-velocity(complete)=(layer_thickness(1)*velocity_upper(complete)+ ...
-    layer_thickness(2)*matched(complete))/sum(layer_thickness);
 end
